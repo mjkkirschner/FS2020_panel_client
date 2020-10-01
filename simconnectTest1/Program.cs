@@ -24,13 +24,19 @@ namespace simconnectTest1
             
         }
 
-        struct AirCraftControl
+        //the following two structs need to be seperated because
+        //some of the data needs to be set via simVars and others as parameters to simEvents.
+        struct AirCraftControlSimVars
         {
             public double aileron;
             public double elevator;
             public bool master_battery;
             public bool gear_position;
+        }
 
+        struct AirCraftControl_EventData
+        {
+            public uint throttlePos;
         }
 
         enum EVENTS
@@ -45,6 +51,8 @@ namespace simconnectTest1
             TOGGLE_CABIN_LIGHTS,
             LANDING_LIGHTS_TOGGLE,
             ALL_LIGHTS_TOGGLE,
+
+            THROTTLE_SET //0-16383 dword
         }
 
         enum groups
@@ -57,15 +65,15 @@ namespace simconnectTest1
         public struct NonSettableData
         {
             public bool LIGHT_STROBE;
-           /* bool LIGHT_TAXI;
-            bool LIGHT_BEACON;
-            bool LIGHT_NAV;
-            bool LIGHT_PANEL;
-            bool LIGHT_CABIN_LIGHTS;
-            bool LIGHT_LANDING;
-            bool ALL_LIGHTS_TOGGLE; //if this changes, disregard state of all other light values.
-           */
+            public bool LIGHT_TAXI;
+            public bool LIGHT_BEACON;
+            public bool LIGHT_NAV;
+            public bool LIGHT_PANEL;
+            public bool LIGHT_CABIN_LIGHTS;
+            public bool LIGHT_LANDING;
         }
+
+        
 
    
         private static EventWaitHandle waitHandle = new AutoResetEvent(false);
@@ -89,24 +97,43 @@ namespace simconnectTest1
                 null,
                 0);
 
+            //hookup a handler for getting data out of the sim.
             connection.OnRecvSimobjectData += Connection_OnRecvSimobjectData; ;
 
+            //build control data definition schema.
             connection.AddToDataDefinition(DEFINITIONS.AirCraftControl, "AILERON POSITION", "position", SIMCONNECT_DATATYPE.FLOAT64, 0, 0);
             connection.AddToDataDefinition(DEFINITIONS.AirCraftControl, "ELEVATOR POSITION", "position", SIMCONNECT_DATATYPE.FLOAT64, 0, 1);
             connection.AddToDataDefinition(DEFINITIONS.AirCraftControl, "ELECTRICAL MASTER BATTERY", "bool", SIMCONNECT_DATATYPE.INT32, 0, 2);
             connection.AddToDataDefinition(DEFINITIONS.AirCraftControl, "GEAR HANDLE POSITION", "bool", SIMCONNECT_DATATYPE.INT32, 0, 3);
 
-            connection.RegisterDataDefineStruct<AirCraftControl>(DEFINITIONS.AirCraftControl);
-            AirCraftControl x;
+            connection.RegisterDataDefineStruct<AirCraftControlSimVars>(DEFINITIONS.AirCraftControl);
+            AirCraftControlSimVars controlSimVarsStruct;
+            AirCraftControl_EventData controlSimEventStruct;
 
+            //build the return data schema - we'll use this data to determine if we should toggle lights (or other events) or not.
+            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, nameof(lightStruct.LIGHT_STROBE).Replace("_"," "), "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
+            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, nameof(lightStruct.LIGHT_BEACON).Replace("_", " "), "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
+            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, nameof(lightStruct.LIGHT_CABIN_LIGHTS).Replace("_", " "), "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
+            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, nameof(lightStruct.LIGHT_LANDING).Replace("_", " "), "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
+            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, nameof(lightStruct.LIGHT_NAV).Replace("_", " "), "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
+            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, nameof(lightStruct.LIGHT_PANEL).Replace("_", " "), "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
+            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, nameof(lightStruct.LIGHT_TAXI).Replace("_", " "), "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
 
-            connection.AddToDataDefinition(DEFINITIONS.NonSettableData, "LIGHT STROBE", "bool", SIMCONNECT_DATATYPE.INT32, 0, 0);
             connection.RegisterDataDefineStruct<NonSettableData>(DEFINITIONS.NonSettableData);
             
-
-            connection.MapClientEventToSimEvent(EVENTS.TOGGLE_MASTER_ALTERNATOR, "TOGGLE_MASTER_ALTERNATOR");
+            //map all events to events with same names
+            connection.MapClientEventToSimEvent(EVENTS.TOGGLE_MASTER_ALTERNATOR, nameof(EVENTS.TOGGLE_MASTER_ALTERNATOR));
             connection.MapClientEventToSimEvent(EVENTS.STROBES_TOGGLE, nameof(EVENTS.STROBES_TOGGLE));
+            connection.MapClientEventToSimEvent(EVENTS.LANDING_LIGHTS_TOGGLE, nameof(EVENTS.LANDING_LIGHTS_TOGGLE));
+            connection.MapClientEventToSimEvent(EVENTS.PANEL_LIGHTS_TOGGLE, nameof(EVENTS.PANEL_LIGHTS_TOGGLE));
+            connection.MapClientEventToSimEvent(EVENTS.TOGGLE_BEACON_LIGHTS, nameof(EVENTS.TOGGLE_BEACON_LIGHTS));
+            connection.MapClientEventToSimEvent(EVENTS.TOGGLE_CABIN_LIGHTS, nameof(EVENTS.TOGGLE_CABIN_LIGHTS));
+            connection.MapClientEventToSimEvent(EVENTS.TOGGLE_NAV_LIGHTS, nameof(EVENTS.TOGGLE_NAV_LIGHTS));
+            connection.MapClientEventToSimEvent(EVENTS.TOGGLE_TAXI_LIGHTS, nameof(EVENTS.TOGGLE_TAXI_LIGHTS));
+
             connection.MapClientEventToSimEvent(EVENTS.ALL_LIGHTS_TOGGLE, nameof(EVENTS.ALL_LIGHTS_TOGGLE));
+
+            connection.MapClientEventToSimEvent(EVENTS.THROTTLE_SET, nameof(EVENTS.THROTTLE_SET));
 
 
             connection.RequestDataOnSimObject(
@@ -126,10 +153,11 @@ namespace simconnectTest1
                     System.Threading.Thread.Sleep(300);
                     connection.ReceiveMessage();
 
-                    x.aileron = ran.Next(-1, 2) * ran.NextDouble();
-                    x.elevator = ran.Next(-1, 2) * ran.NextDouble();
-                    x.master_battery = ran.Next(2) == 0 ? false : true;
-                    x.gear_position = ran.Next(2) == 0 ? false : true;
+                    controlSimVarsStruct.aileron = ran.Next(-1, 2) * ran.NextDouble();
+                    controlSimVarsStruct.elevator = ran.Next(-1, 2) * ran.NextDouble();
+                    controlSimVarsStruct.master_battery = ran.Next(2) == 0 ? false : true;
+                    controlSimVarsStruct.gear_position = ran.Next(2) == 0 ? false : true;
+                    controlSimEventStruct.throttlePos = (uint)ran.Next(0, 16383);
                     //Debug.WriteLine(x.aileron);
                    // Debug.WriteLine(x.elevator);
                     try
@@ -142,6 +170,11 @@ namespace simconnectTest1
                         {
                             connection.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, EVENTS.STROBES_TOGGLE, 0, groups.group1, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
                         }
+
+
+
+                        connection.TransmitClientEvent(SimConnect.SIMCONNECT_OBJECT_ID_USER, EVENTS.THROTTLE_SET, controlSimEventStruct.throttlePos, groups.group1, SIMCONNECT_EVENT_FLAG.GROUPID_IS_PRIORITY);
+
                     }
                     catch (Exception e)
                     {
@@ -156,9 +189,14 @@ namespace simconnectTest1
                 panelStrobeState = checkbox.Checked;
             };
 
+#if DEBUG
+            //create a modal dialog for testing our panel
+            //without actual serial coms.
             form.Controls.Add(checkbox);
             form.ShowDialog();
-
+#else
+            task.Wait();
+#endif
 
         }
 
@@ -166,7 +204,7 @@ namespace simconnectTest1
 
         private static void Connection_OnRecvSimobjectData(SimConnect sender, SIMCONNECT_RECV_SIMOBJECT_DATA data)
         {
-            Console.WriteLine("here");
+            Debug.WriteLine("recieving data from sim");
             lightStruct = (NonSettableData)data.dwData[0];
             
         }
